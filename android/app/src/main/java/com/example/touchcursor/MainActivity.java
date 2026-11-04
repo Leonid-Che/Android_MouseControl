@@ -328,7 +328,7 @@ public class MainActivity extends AppCompatActivity
         new android.app.AlertDialog.Builder(this)
                 .setTitle(R.string.bt_pick_device)
                 .setItems(items, (d, w) -> {
-                    String mac = BtClient.addressOf(items.get(w).toString());
+                    String mac = BtClient.addressOf(items[w].toString());
                     // Bluetooth — активный транспорт; Wi-Fi канал закрываем
                     Transport.set(this, Transport.BLUETOOTH);
                     if (net.isConnected()) net.disconnect();

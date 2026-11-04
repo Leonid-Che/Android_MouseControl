@@ -147,11 +147,17 @@ public class BtClient {
         return "";
     }
 
+    @SuppressLint("MissingPermission")
     private static boolean isPlausibleTarget(BluetoothDevice d) {
         int major;
         try {
+            checkConnectPermission(d);
             major = d.getBluetoothClass() != null
                     ? d.getBluetoothClass().getMajorDeviceClass() : -1;
+        } catch (SecurityException e) {
+            // нет разрешения CONNECT — всё равно показываем устройство,
+            // при подключении система запросит разрешение
+            return true;
         } catch (Exception e) {
             return true; // не удалось определить класс — покажем устройство
         }
@@ -167,11 +173,30 @@ public class BtClient {
         }
     }
 
+    /**
+     * Принудительная проверка разрешения BLUETOOTH_CONNECT: если оно не выдано,
+     * бросается SecurityException (обработчик ниже). Это явная проверка, которую
+     * требует lint (MissingPermission) для вызовов BluetoothDevice.
+     */
+    private static void checkConnectPermission(BluetoothDevice d) {
+        android.content.pm.PackageManager pm = d.getContext()
+                .getPackageManager();
+        int r = pm.checkPermission("android.permission.BLUETOOTH_CONNECT",
+                d.getContext().getPackageName());
+        if (r != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("BLUETOOTH_CONNECT not granted");
+        }
+    }
+
+    @SuppressLint("MissingPermission")
     private static String safeName(BluetoothDevice d) {
         try {
+            checkConnectPermission(d);
             String n = d.getName();
             if (n != null && !n.isEmpty()) return n;
-        } catch (SecurityException | RuntimeException ignored) { }
+        } catch (SecurityException ignored) {
+            // разрешения нет — вернём имя по умолчанию
+        } catch (RuntimeException ignored) { }
         return "устройство";
     }
 
@@ -226,12 +251,25 @@ public class BtClient {
             deviceName = safeName(dev);
 
             BluetoothSocket s;
+            boolean fallbackNeeded = false;
             try {
                 s = createInsecureRfcomm(dev);
             } catch (IOException e1) {
                 // запасной канал: классический RFCOMM-сокет в обход SDP-записи
                 Log.w(TAG, "insecure RFCOMM failed, trying fallback: " + e1);
+                fallbackNeeded = true;
                 s = createFallbackRfcomm(dev);
+            }
+
+            if (fallbackNeeded) {
+                try {
+                    checkConnectPermission(dev);
+                } catch (SecurityException se) {
+                    // Разрешения нет — закрываем сокет и сообщаем причину.
+                    try { s.close(); } catch (IOException ignored) { }
+                    onFail("нет разрешения BLUETOOTH_CONNECT — разрешите его в настройках приложения");
+                    return;
+                }
             }
 
             s.connect();
@@ -249,7 +287,12 @@ public class BtClient {
         }
     }
 
+    @SuppressLint("MissingPermission")
     private BluetoothSocket createInsecureRfcomm(BluetoothDevice dev) throws IOException {
+        // Явная проверка разрешения BLUETOOTH_CONNECT (требование lint):
+        // без него бросаем SecurityException — вызывающий код обработает его
+        // и покажет понятную причину сбоя подключения.
+        checkConnectPermission(dev);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.GINGERBREAD_MR1) {
             return dev.createInsecureRfcommSocketToServiceRecord(SPP_UUID);
         }
