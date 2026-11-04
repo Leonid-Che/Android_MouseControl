@@ -148,10 +148,10 @@ public class BtClient {
     }
 
     @SuppressLint("MissingPermission")
-    private static boolean isPlausibleTarget(BluetoothDevice d) {
+    private boolean isPlausibleTarget(BluetoothDevice d) {
         int major;
         try {
-            checkConnectPermission(d);
+            checkConnectPermission();
             major = d.getBluetoothClass() != null
                     ? d.getBluetoothClass().getMajorDeviceClass() : -1;
         } catch (SecurityException e) {
@@ -177,21 +177,21 @@ public class BtClient {
      * Принудительная проверка разрешения BLUETOOTH_CONNECT: если оно не выдано,
      * бросается SecurityException (обработчик ниже). Это явная проверка, которую
      * требует lint (MissingPermission) для вызовов BluetoothDevice.
+     * Контекст берётся из поля ctx — у BluetoothDevice метода getContext() нет.
      */
-    private static void checkConnectPermission(BluetoothDevice d) {
-        android.content.pm.PackageManager pm = d.getContext()
-                .getPackageManager();
+    private void checkConnectPermission() {
+        android.content.pm.PackageManager pm = ctx.getPackageManager();
         int r = pm.checkPermission("android.permission.BLUETOOTH_CONNECT",
-                d.getContext().getPackageName());
+                ctx.getPackageName());
         if (r != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             throw new SecurityException("BLUETOOTH_CONNECT not granted");
         }
     }
 
     @SuppressLint("MissingPermission")
-    private static String safeName(BluetoothDevice d) {
+    private String safeName(BluetoothDevice d) {
         try {
-            checkConnectPermission(d);
+            checkConnectPermission();
             String n = d.getName();
             if (n != null && !n.isEmpty()) return n;
         } catch (SecurityException ignored) {
@@ -263,7 +263,7 @@ public class BtClient {
 
             if (fallbackNeeded) {
                 try {
-                    checkConnectPermission(dev);
+                    checkConnectPermission();
                 } catch (SecurityException se) {
                     // Разрешения нет — закрываем сокет и сообщаем причину.
                     try { s.close(); } catch (IOException ignored) { }
@@ -292,7 +292,7 @@ public class BtClient {
         // Явная проверка разрешения BLUETOOTH_CONNECT (требование lint):
         // без него бросаем SecurityException — вызывающий код обработает его
         // и покажет понятную причину сбоя подключения.
-        checkConnectPermission(dev);
+        checkConnectPermission();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.GINGERBREAD_MR1) {
             return dev.createInsecureRfcommSocketToServiceRecord(SPP_UUID);
         }
