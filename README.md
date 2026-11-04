@@ -54,7 +54,10 @@ UDP :8722 — автопоиск: запрос `TOUCHCURSOR_DISCOVER` → отв
 **Вариант А — готовый EXE, без Python (рекомендуется):**
 
 1. На машине с установленным Python один раз запустите **`build_exe.bat`**
-   (он сам поставит `pyautogui` и `pyinstaller` и соберёт EXE).
+   (он проверит версию Python, сам поставит `pyautogui`, `pybluez` (опционально)
+   и `pyinstaller`, и соберёт EXE). Требуется Python 3.8–3.12; для поддержки
+   Bluetooth лучше Python 3.8–3.11 (для 3.12+ pybluez обычно не ставится —
+   скрипт предупредит и соберёт EXE только с Wi-Fi).
    Результат: папка **`dist\TouchCursorServer\`** со `TouchCursorServer.exe`.
 2. Скопируйте эту папку целиком на любой Windows 10 ПК — Python там не нужен.
 3. Запустите двойным кликом **`TouchCursorServer.exe`** (или `run_exe.bat` —

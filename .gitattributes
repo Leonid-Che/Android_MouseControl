@@ -1,2 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# .bat/.cmd must keep Windows CRLF line endings: cmd.exe misparses LF-only
+# scripts (multi-line constructs, labels/goto) - pin them explicitly.
+*.bat text eol=crlf
+*.cmd text eol=crlf
