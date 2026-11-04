@@ -14,21 +14,33 @@
     <string name="lmb">ЛКМ</string>
     <string name="rmb">ПКМ</string>
     <string name="res1">Резерв 1</string>
-    <string name="res2">Резерв 2</string>
+    <!-- Вторая резервная кнопка задействована под Bluetooth -->
+    <string name="bt_off_short">BT</string>
+    <string name="bt_off">Bluetooth: выкл</string>
+    <string name="bt_on">Bluetooth: подключено</string>
 
     <!-- Статус -->
     <string name="st_idle">Готово. Нажмите Wi-Fi, чтобы указать компьютер.</string>
     <string name="st_connecting">Подключение…</string>
-    <string name="st_connected">Связь: %1$s:%2$d</string>
+    <string name="st_connected">Связь (Wi-Fi): %1$s:%2$d</string>
+    <string name="st_connected_bt">Связь (Bluetooth): %1$s</string>
     <string name="st_disconnected">Нет связи: %1$s</string>
     <string name="st_control_no_link">Управление включено, но связь с ПК потеряна…</string>
 
     <!-- Предупреждения -->
-    <string name="warn_no_host">Сначала укажите адрес компьютера (кнопка Wi-Fi)</string>
+    <string name="warn_no_host">Сначала укажите компьютер (кнопка Wi-Fi или Bluetooth)</string>
     <string name="warn_control_off">Сначала включите управление кнопкой «Управление»</string>
     <string name="warn_no_link">Нет связи с компьютером</string>
     <string name="toast_connected">Подключено к %1$s</string>
     <string name="reserved_toast">Кнопка «Резерв %1$d» зарезервирована на будущее</string>
+
+    <!-- Bluetooth -->
+    <string name="bt_unsupported">На этом устройстве нет Bluetooth-адаптера</string>
+    <string name="bt_enable_first">Включите Bluetooth и повторите нажатие кнопки BT</string>
+    <string name="bt_no_paired_title">Нет сопряжённых устройств</string>
+    <string name="bt_pair_open_settings">Сопряжение — открыть настройки Bluetooth</string>
+    <string name="bt_pick_device">Выберите компьютер</string>
+    <string name="bt_help">1. На компьютере запустите сервер: touchcursor_server.py --transport bt\n   (или TouchCursorServer.exe с transport = bt в touchcursor.ini).\n2. Сопряжите телефон и ПК в настройках Bluetooth Windows.\n3. Нажмите кнопку BT повторно и выберите компьютер из списка.</string>
 
     <!-- Диалог Wi-Fi -->
     <string name="wifi_dialog_title">Связь по Wi-Fi</string>

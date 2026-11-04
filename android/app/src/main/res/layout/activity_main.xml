@@ -94,10 +94,11 @@
                 style="@style/BtnWide"
                 android:text="@string/rmb" />
 
+            <!-- Бывшая резервная кнопка 2 — теперь подключение по Bluetooth -->
             <Button
-                android:id="@+id/btn_res2"
+                android:id="@+id/btn_bt"
                 style="@style/BtnSmall"
-                android:text="@string/res2" />
+                android:text="@string/bt_off_short" />
         </LinearLayout>
     </LinearLayout>
 </LinearLayout>

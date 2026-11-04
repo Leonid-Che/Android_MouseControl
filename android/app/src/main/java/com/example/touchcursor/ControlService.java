@@ -226,7 +226,8 @@ public class ControlService extends Service {
         PendingIntent pioff = PendingIntent.getActivity(this, 1, off,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        String host = prefs.getString(Prefs.HOST, "");
+        String host = Transport.savedTarget(this);
+        if (host.isEmpty()) host = prefs.getString(Prefs.HOST, "");
         String text = host.isEmpty()
                 ? getString(R.string.notif_no_host)
                 : getString(R.string.notif_connected, host);

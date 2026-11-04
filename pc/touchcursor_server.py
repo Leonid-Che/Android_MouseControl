@@ -335,6 +335,66 @@ class ClientSession(threading.Thread):
         self.executor.submit(("RESET",))
 
 
+class BtSession(ClientSession):
+    """Сессия поверх Bluetooth RFCOMM-сокета (протокол сообщений — тот же)."""
+
+    def __init__(self, sock, peer_desc: str, executor: CommandExecutor):
+        super().__init__(_BtCompatSocket(sock), ("bluetooth", 0), executor)
+        self.addr = ("bluetooth", 0)
+        self.peer_desc = peer_desc
+
+    def run(self) -> None:
+        log("Bluetooth-клиент подключён: %s" % self.peer_desc)
+        ClientSession.run(self)
+
+
+class _BtCompatSocket:
+    """Обёртка BluetoothSocket под «сокето-подобный» интерфейс recv/sendall/close.
+
+    Bluetooth-сокет Windows отдаёт поток; читаем побайтово в чанки по 4096.
+    """
+
+    def __init__(self, sock):
+        self.sock = sock
+        self._r = None
+        self._w = None
+
+    def _streams(self):
+        if self._r is None:
+            self._r = self.sock.makefile("rb")
+            self._w = self.sock.makefile("wb")
+        return self._r, self._w
+
+    def settimeout(self, t):
+        pass  # блокирующий read; PING клиента не даёт «висеть» вечно
+
+    def recv(self, n):
+        r, _ = self._streams()
+        buf = bytearray()
+        while len(buf) < n:
+            b = r.read(1)
+            if not b:
+                break
+            buf += b
+        return bytes(buf)
+
+    def sendall(self, data):
+        _, w = self._streams()
+        w.write(data)
+        w.flush()
+
+    def close(self):
+        try:
+            if self._r: self._r.close()
+            if self._w: self._w.close()
+        except OSError:
+            pass
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
 class DiscoveryServer(threading.Thread):
     """UDP-ответчик для автоматического поиска сервера в локальной сети."""
 

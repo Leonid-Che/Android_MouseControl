@@ -29,10 +29,13 @@ public class MainActivity extends AppCompatActivity
     public static final String ACTION_DISABLE = "com.example.touchcursor.DISABLE";
 
     private TouchPadView pad;
-    private Button btnControl, btnWifi, btnLmb, btnRmb, btnRes1, btnRes2;
+    private Button btnControl, btnWifi, btnLmb, btnRmb, btnRes1, btnBt;
     private TextView status;
 
     private NetClient net;
+    private BtClient bt;
+    /** Канал, которому принадлежат последние события onConnected/onDisconnected. */
+    private int eventSource = Transport.WIFI;
     private boolean controlOn = false;
     private boolean connected = false;
 
@@ -56,12 +59,14 @@ public class MainActivity extends AppCompatActivity
         btnLmb      = findViewById(R.id.btn_lmb);
         btnRmb      = findViewById(R.id.btn_rmb);
         btnRes1     = findViewById(R.id.btn_res1);
-        btnRes2     = findViewById(R.id.btn_res2);
+        btnBt       = findViewById(R.id.btn_bt);
 
         pad.setListener(this);
 
         net = ControlService.ensureNetStatic(this);
         net.setListener(this);
+        bt = new BtClient(this);
+        bt.setListener(btListener);
 
         // --- ЛКМ / ПКМ (экранные) ---
         bindHoldButton(btnLmb, Protocol.DOWN_LEFT, Protocol.UP_LEFT, true);
@@ -70,7 +75,7 @@ public class MainActivity extends AppCompatActivity
         btnWifi.setOnClickListener(v -> openWifi());
         btnControl.setOnClickListener(v -> toggleControl());
         btnRes1.setOnClickListener(v -> reserve(1));
-        btnRes2.setOnClickListener(v -> reserve(2));
+        btnBt.setOnClickListener(v -> openBluetooth());
 
         volUpMachine = new MouseButtonMachine(new MouseButtonMachine.Sink() {
             @Override public void singleClick() { sendCmd(Protocol.DOWN_LEFT); sendCmd(Protocol.UP_LEFT); flash(btnLmb); }
@@ -89,12 +94,22 @@ public class MainActivity extends AppCompatActivity
 
         // Если управление было включено до закрытия приложения — восстанавливаем его
         if (Prefs.controlOn(this)) {
-            String h = Prefs.host(this);
-            if (!h.isEmpty()) net.connect(h, Protocol.PORT);
+            String h = Transport.savedTarget(this);
+            if (!h.isEmpty()) active().connect(h);
             enableControl(true);
         }
         handleIntent(getIntent());
         refreshUi();
+    }
+
+    /** Активный канал связи (Wi-Fi или Bluetooth) как единый интерфейс Link. */
+    private Transport.Link active() {
+        return Transport.activeLink(this, net, bt);
+    }
+
+    private boolean activeConnected() {
+        return Transport.current(this) == Transport.BLUETOOTH
+                ? bt.isConnected() : net.isConnected();
     }
 
     @Override
@@ -157,13 +172,14 @@ public class MainActivity extends AppCompatActivity
 
     private void toggleControl() {
         if (!controlOn) {
-            String h = Prefs.host(this);
+            String h = Transport.savedTarget(this);
             if (h.isEmpty()) {
                 toast(getString(R.string.warn_no_host));
-                openWifi();
+                if (Transport.current(this) == Transport.BLUETOOTH) openBluetooth();
+                else openWifi();
                 return;
             }
-            if (!net.isConnected()) net.connect(h, Protocol.PORT);
+            if (!activeConnected()) active().connect(h);
             enableControl(true);
         } else {
             enableControl(false);
@@ -233,13 +249,13 @@ public class MainActivity extends AppCompatActivity
         float sx = Prefs.sensX(this), sy = Prefs.sensY(this);
         float dx = dxPx * sx;
         float dy = dyPx * sy * (Prefs.invertY(this) ? -1f : 1f);
-        net.sendMove(dx, dy);
+        active().sendMove(dx, dy);
     }
 
     @Override
     public void onScroll(int notches) {
         if (!controlOn) return;
-        net.send(Protocol.wheel(notches));
+        active().send(Protocol.wheel(notches));
     }
 
     @Override
@@ -257,12 +273,17 @@ public class MainActivity extends AppCompatActivity
         flash(btnLmb);
     }
 
-    // ============================ СЕТЬ ============================
+    // ============================ СЕТЬ / WI-FI ============================
 
     private void openWifi() {
+        // Wi-Fi — активный транспорт; Bluetooth-канал при этом закрываем
+        Transport.set(this, Transport.WIFI);
+        if (bt.isConnected()) bt.disconnect();
+        eventSource = Transport.WIFI;
+
         WifiDialog.show(this, net, connected, new WifiDialog.Result() {
             @Override public void onConnect(String host) {
-                net.connect(host, Protocol.PORT);
+                active().connect(host);
             }
             @Override public void onDisconnect() {
                 net.disconnect();
@@ -272,11 +293,94 @@ public class MainActivity extends AppCompatActivity
         });
     }
 
+    // ============================ BLUETOOTH ============================
+
+    /** Диалог выбора устройства: сопряжённые ПК/адаптеры + переход в настройки для пары. */
+    private void openBluetooth() {
+        if (!BtClient.isSupported(this)) {
+            toast(getString(R.string.bt_unsupported));
+            return;
+        }
+        if (!bt.isBluetoothEnabled()) {
+            // сначала включаем адаптер — после включения пользователь повторит нажатие
+            bt.requestEnableBluetooth();
+            toast(getString(R.string.bt_enable_first));
+            return;
+        }
+
+        java.util.List<String> devices = bt.listPairedCandidates();
+        if (devices.isEmpty()) {
+            CharSequence[] opts = { getString(R.string.bt_pair_open_settings),
+                                    getString(R.string.cancel) };
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle(R.string.bt_no_paired_title)
+                    .setItems(opts, (d, w) -> {
+                        if (w == 0) {
+                            Prefs.setTransport(this, Transport.BLUETOOTH);
+                            bt.openBluetoothSettings();
+                        }
+                    })
+                    .show();
+            return;
+        }
+
+        final CharSequence[] items = devices.toArray(new CharSequence[0]);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(R.string.bt_pick_device)
+                .setItems(items, (d, w) -> {
+                    String mac = BtClient.addressOf(items.get(w).toString());
+                    // Bluetooth — активный транспорт; Wi-Fi канал закрываем
+                    Transport.set(this, Transport.BLUETOOTH);
+                    if (net.isConnected()) net.disconnect();
+                    connected = false;
+                    eventSource = Transport.BLUETOOTH;
+                    Prefs.setBtAddress(this, mac);
+                    bt.connect(mac);
+                })
+                .setNegativeButton(R.string.bt_pair_open_settings, (d, w) -> {
+                    Prefs.setTransport(this, Transport.BLUETOOTH);
+                    bt.openBluetoothSettings();
+                })
+                .show();
+    }
+
+    /** Слушатель Bluetooth-канала: обновляет статус так же, как сетевой. */
+    private final BtClient.Listener btListener = new BtClient.Listener() {
+        @Override public void onConnecting() {
+            runOnUiThread(() -> {
+                eventSource = Transport.BLUETOOTH;
+                connected = false;
+                status.setText(R.string.st_connecting);
+                refreshUi();
+            });
+        }
+        @Override public void onConnected(String deviceName) {
+            runOnUiThread(() -> {
+                eventSource = Transport.BLUETOOTH;
+                connected = true;
+                toast(getString(R.string.toast_connected, deviceName));
+                refreshUi();
+                ControlService cs = ControlService.instance;
+                if (cs != null) cs.refreshNotification();
+            });
+        }
+        @Override public void onDisconnected(String reason) {
+            runOnUiThread(() -> {
+                if (eventSource != Transport.BLUETOOTH) return; // событие «про запасного» канала
+                connected = false;
+                status.setText(getString(R.string.st_disconnected, reason));
+                refreshUi();
+            });
+        }
+    };
+
     @Override public void onConnecting() {
+        eventSource = Transport.WIFI;
         runOnUiThread(() -> { connected = false; status.setText(R.string.st_connecting); refreshUi(); });
     }
 
     @Override public void onConnected(String host) {
+        eventSource = Transport.WIFI;
         runOnUiThread(() -> {
             connected = true;
             Prefs.setHost(this, host);
@@ -288,6 +392,7 @@ public class MainActivity extends AppCompatActivity
     }
 
     @Override public void onDisconnected(String reason) {
+        if (eventSource != Transport.WIFI) return; // событие «про запасного» канала
         runOnUiThread(() -> {
             connected = false;
             status.setText(getString(R.string.st_disconnected, reason));
@@ -317,19 +422,32 @@ public class MainActivity extends AppCompatActivity
     // ============================ UI ============================
 
     private void refreshUi() {
+        boolean btMode = Transport.current(this) == Transport.BLUETOOTH;
+
         btnControl.setText(controlOn ? R.string.control_on : R.string.control_off);
         btnControl.setBackgroundResource(controlOn ? R.drawable.btn_green : R.drawable.btn_dark);
 
-        btnWifi.setText(connected ? R.string.wifi_on : R.string.wifi_off);
-        btnWifi.setBackgroundResource(connected ? R.drawable.btn_blue : R.drawable.btn_dark);
+        btnWifi.setText(connected && !btMode ? R.string.wifi_on : R.string.wifi_off);
+        btnWifi.setBackgroundResource(connected && !btMode ? R.drawable.btn_blue : R.drawable.btn_dark);
 
-        status.setText(connected
-                ? getString(R.string.st_connected, net.getHost(), net.getPortOr(Protocol.PORT))
-                : controlOn ? getString(R.string.st_control_no_link) : getString(R.string.st_idle));
+        btnBt.setText(connected && btMode ? R.string.bt_on : R.string.bt_off);
+        btnBt.setBackgroundResource(connected && btMode ? R.drawable.btn_blue : R.drawable.btn_dark);
 
-        // зарезервированные кнопки — просто помечены «на будущее»
+        if (connected) {
+            String target = active().getHost();
+            if (btMode) {
+                status.setText(getString(R.string.st_connected_bt, target));
+            } else {
+                status.setText(getString(R.string.st_connected, target, net.getPortOr(Protocol.PORT)));
+            }
+        } else {
+            status.setText(controlOn
+                    ? getString(R.string.st_control_no_link)
+                    : getString(R.string.st_idle));
+        }
+
+        // зарезервированная кнопка — просто помечена «на будущее»
         btnRes1.setEnabled(true);
-        btnRes2.setEnabled(true);
     }
 
     private void setHeld(Button b, boolean held) {
@@ -352,7 +470,7 @@ public class MainActivity extends AppCompatActivity
     }
 
     private void sendCmd(String cmd) {
-        if (connected || net.isConnected()) net.send(cmd);
+        if (connected || activeConnected()) active().send(cmd);
         else toast(getString(R.string.warn_no_link));
     }
 
@@ -362,10 +480,19 @@ public class MainActivity extends AppCompatActivity
 
     private void askPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            java.util.List<String> need = new java.util.ArrayList<>();
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED) {
+                need.add(Manifest.permission.POST_NOTIFICATIONS);
+            }
+            // Android 12+: для работы с сопряжёнными устройствами и подключения по RFCOMM
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+                    != PackageManager.PERMISSION_GRANTED) {
+                need.add(Manifest.permission.BLUETOOTH_CONNECT);
+            }
+            if (!need.isEmpty()) {
                 ActivityCompat.requestPermissions(this,
-                        new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_PERMS);
+                        need.toArray(new String[0]), REQ_PERMS);
             }
         }
     }
@@ -394,6 +521,7 @@ public class MainActivity extends AppCompatActivity
     @Override
     protected void onDestroy() {
         if (net != null) net.setListener(null);
+        if (bt != null) { bt.setListener(null); bt.shutdown(); }
         super.onDestroy();
     }
 }
