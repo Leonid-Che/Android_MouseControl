@@ -6,3 +6,4 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 pc/build_exe.bat text eol=crlf
+pc/build_exe.bat -text
