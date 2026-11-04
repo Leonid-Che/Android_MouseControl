@@ -24,6 +24,14 @@ if errorlevel 1 (
     echo       Установка pyautogui...
     python -m pip install --upgrade pyautogui || goto :fail
 )
+rem Bluetooth-поддержка опциональна: pybluez требует Visual C++ Build Tools.
+rem Если установка не удалась — EXE соберётся без Bluetooth (только Wi-Fi).
+python -c "import bluetooth" 2>nul
+if errorlevel 1 (
+    echo       Установка pybluez ^(Bluetooth, опционально^)...
+    python -m pip install pybluez 2>nul
+    if errorlevel 1 echo       ! pybluez не установлен - EXE будет работать только по Wi-Fi.
+)
 python -c "import PyInstaller" 2>nul
 if errorlevel 1 (
     echo       Установка PyInstaller...

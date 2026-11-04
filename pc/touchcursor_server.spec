@@ -27,6 +27,9 @@ a = Analysis(
         'PIL',
         'PIL.Image',
         'PIL.ImageTk',
+        # Bluetooth (pybluez) — опционально: если не установлен, EXE работает
+        # только по Wi-Fi (сервер сам сообщит об этом при запуске)
+        'bluetooth',
     ],
     hookspath=[],
     hooksconfig={},
