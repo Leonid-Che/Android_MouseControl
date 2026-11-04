@@ -40,6 +40,7 @@ TouchCursor PC Server
 """
 
 import argparse
+import collections
 import configparser
 import ipaddress
 import os
@@ -362,51 +363,89 @@ class BtSession(ClientSession):
 class _BtCompatSocket:
     """Обёртка BluetoothSocket под «сокето-подобный» интерфейс recv/sendall/close.
 
-    Bluetooth-сокет Windows отдаёт поток; читаем побайтово в чанки по 4096.
+    Особенности Bluetooth-сокета Windows (pybluez):
+      * makefile() может возвращать НЕЗАВИСИМЫЕ потоки чтения и записи —
+        поэтому пишем напрямую в сокет (sock.send), а не в поток;
+      * сокеты Windows не умеют неблокирующий режим / таймауты, а read()
+        блокирует до прихода данных. Чтобы сессию можно было корректно
+        закрыть (обрыв связи, остановка сервера), читает отдельный фоновый
+        поток-«почтальон»: он кладёт байты в deque, а recv() ждёт их
+        с таймаутом и выдаёт не дожидаясь полного буфера.
     """
 
     def __init__(self, sock):
         self.sock = sock
         self._r = None
-        self._w = None
+        self._closed = False
+        self._q = collections.deque()
+        self._lock = threading.Lock()
+        self._data = threading.Condition(self._lock)
+        self._reader = threading.Thread(target=self._read_loop,
+                                        daemon=True, name="bt-read")
+        self._reader.start()
 
     def _streams(self):
         if self._r is None:
             self._r = self.sock.makefile("rb")
-            self._w = self.sock.makefile("wb")
-        return self._r, self._w
+        return self._r
 
-    def settimeout(self, t):
-        # pybluez на Windows поддерживает settimeout — пробуем передать,
-        # если нет — блокирующий read (PING клиента не даёт «висеть» вечно).
+    def _read_loop(self):
+        """Фоновый поток: блокирующий read -> очередь, без зависаний recv()."""
         try:
-            self.sock.settimeout(t)
+            r = self._streams()
+            while not self._closed:
+                b = r.read(1)
+                if not b:
+                    break
+                with self._lock:
+                    self._q.append(b[0])      # храним int-байты (deque of ints)
+                    self._data.notify_all()   # держим lock при notify — без гонки
         except Exception:
             pass
+        finally:
+            with self._lock:
+                self._closed = True
+                self._data.notify_all()       # разбудить ожидающих
+
+    def settimeout(self, t):
+        # настоящий таймаут у BT-сокета недоступен — эмулируется в recv()
+        self._timeout = t
 
     def recv(self, n):
-        r, _ = self._streams()
-        buf = bytearray()
-        while len(buf) < n:
-            b = r.read(1)
-            if not b:
-                break
-            buf += b
-            # возвращаем то, что уже есть, не дожидаясь полного буфера —
-            # иначе small-talk (PONG/OK) и команды будут задерживаться
-            if len(buf) >= 64:
-                break
-        return bytes(buf)
+        # Первый байт ждём до таймаута (закрытие сессии/обрыв), дальше —
+        # собираем всё, что уже пришло, не дожидаясь полного буфера.
+        timeout = getattr(self, "_timeout", None) or 5.0
+        out = bytearray()
+        deadline = time.monotonic() + timeout
+        while len(out) < n:
+            with self._lock:
+                if self._q:
+                    take = min(n - len(out), len(self._q))
+                    for _ in range(take):
+                        out.append(self._q.popleft())
+                    continue
+                if self._closed:
+                    break
+                remain = deadline - time.monotonic() if not out else 0.0
+                if remain <= 0 or not self._data.wait(remain):
+                    break
+        return bytes(out)
 
     def sendall(self, data):
-        _, w = self._streams()
-        w.write(data)
-        w.flush()
+        # пишем в сам сокет: на Windows makefile('wb') может не работать
+        mv = memoryview(data)
+        while mv:
+            sent = self.sock.send(mv)
+            if not sent:
+                raise OSError("bluetooth socket closed on send")
+            mv = mv[sent:]
 
     def close(self):
+        with self._lock:
+            self._closed = True
+            self._data.notify_all()
         try:
             if self._r: self._r.close()
-            if self._w: self._w.close()
         except OSError:
             pass
         try:
@@ -549,10 +588,16 @@ class DiscoveryServer(threading.Thread):
 
 class TouchCursorServer:
     def __init__(self, port: int, udp_port: int, scale: float, failsafe: bool,
-                 bt_channel: int = BT_DEFAULT_CHANNEL):
+                 bt_channel: int = BT_DEFAULT_CHANNEL, transport: str = "all"):
         self.port = port
         self.scale = scale
-        self.bt_channel = bt_channel
+        # transport: "wifi" | "bt" | "all" — что слушать (см. touchcursor.ini)
+        self.transport = (transport or "all").strip().lower()
+        if self.transport not in ("wifi", "bt", "bluetooth", "all"):
+            self.transport = "all"
+        self.bt_enabled = self.transport in ("bt", "bluetooth", "all")
+        self.wifi_enabled = self.transport in ("wifi", "all")
+        self.bt_channel = bt_channel if self.bt_enabled else 0
         pyautogui.FAILSAFE = failsafe
         pyautogui.PAUSE = 0
         try:
@@ -565,28 +610,40 @@ class TouchCursorServer:
         self.sessions: "list[ClientSession]" = []
         self.sessions_lock = threading.Lock()
         self.bt_listener = BluetoothListener(
-            bt_channel, self.executor, self.sessions, self.sessions_lock)
+            self.bt_channel, self.executor, self.sessions, self.sessions_lock)
         self.tcp = None
         self.alive = True
 
     def run(self) -> None:
         self.executor.start()
-        self.discovery.start()
-        self.bt_listener.start()
+        if self.wifi_enabled:
+            self.discovery.start()
+        if self.bt_enabled:
+            self.bt_listener.start()
 
-        self.tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            self.tcp.bind(("0.0.0.0", self.port))
-        except OSError as e:
-            log("Не удалось занять TCP-порт %d: %s" % (self.port, e))
-            sys.exit(1)
-        self.tcp.listen(4)
+        if self.wifi_enabled:
+            self.tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                self.tcp.bind(("0.0.0.0", self.port))
+            except OSError as e:
+                log("Не удалось занять TCP-порт %d: %s" % (self.port, e))
+                sys.exit(1)
+            self.tcp.listen(4)
         w, h = pyautogui.size()
-        log("Сервер запущен. TCP :%d | UDP :%d | Bluetooth канал %d | экран %dx%d | масштаб %.2f"
-            % (self.port, self.discovery.udp_port, self.bt_channel, w, h, self.scale))
+        mode = {"wifi": "Wi-Fi", "bt": "Bluetooth", "bluetooth": "Bluetooth",
+                "all": "Wi-Fi + Bluetooth"}[self.transport]
+        log("Сервер запущен (%s). TCP :%d | UDP :%d | Bluetooth канал %d | экран %dx%d | масштаб %.2f"
+            % (mode, self.port, self.discovery.udp_port, self.bt_channel, w, h, self.scale))
         log("Подключение со смартфона: Wi-Fi (та же сеть) или Bluetooth (сопряжение).")
         log("Ctrl+C — остановка сервера.")
+
+        if not self.wifi_enabled:
+            # Bluetooth-only режим: ждём соединения только по RFCOMM
+            while self.alive:
+                time.sleep(0.5)
+            self.shutdown()
+            return
 
         try:
             while self.alive:

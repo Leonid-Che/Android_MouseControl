@@ -3,5 +3,10 @@
 # TouchCursorServer.exe эти пакеты не нужны.
 pyautogui>=0.9.54
 
+# Bluetooth-поддержка (RFCOMM) на Windows. Ставится автоматически скриптом
+# build_exe.bat; если установка не удалась — сервер работает только по Wi-Fi.
+# Требуется Visual C++ Build Tools (setuptools под py3.13+ собирают его сами).
+pybluez>=0.22 ; sys_platform == 'win32'
+
 # Для сборки EXE (устанавливается автоматически скриптом build_exe.bat):
 #   pip install pyinstaller
